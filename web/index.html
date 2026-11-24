@@ -1,0 +1,143 @@
+<!DOCTYPE html>
+<html lang="zh-CN">
+<head>
+<meta charset="utf-8" />
+<meta name="viewport" content="width=device-width, initial-scale=1" />
+<title>频谱涂抹式音频编辑器 · Spectral Smearing Editor</title>
+<style>
+  :root {
+    --bg: #0f1115; --panel: #171a21; --line: #262b36; --text: #d7dce5;
+    --muted: #8b93a3; --accent: #4cc2ff; --warn: #ffb454; --good: #54d18c;
+  }
+  * { box-sizing: border-box; }
+  body { margin:0; background:var(--bg); color:var(--text);
+         font:13px/1.5 system-ui,-apple-system,"Segoe UI",Roboto,"PingFang SC","Microsoft YaHei",sans-serif; }
+  header { padding:10px 16px; border-bottom:1px solid var(--line);
+           display:flex; align-items:center; gap:14px; flex-wrap:wrap; background:var(--panel); }
+  header h1 { font-size:15px; margin:0; font-weight:600; }
+  .tag { color:var(--muted); font-size:12px; }
+  main { display:grid; grid-template-columns: 1fr 320px; gap:12px; padding:12px; }
+  .card { background:var(--panel); border:1px solid var(--line); border-radius:10px; padding:12px; }
+  .card h2 { font-size:13px; margin:0 0 8px; color:var(--accent); font-weight:600; }
+  canvas { width:100%; background:#000; border-radius:8px; display:block; cursor:crosshair; }
+  .row { display:flex; gap:8px; align-items:center; flex-wrap:wrap; margin:6px 0; }
+  label { color:var(--muted); }
+  input,select,button { background:#0e1117; color:var(--text); border:1px solid var(--line);
+                        border-radius:7px; padding:6px 9px; font-size:12px; }
+  button { cursor:pointer; }
+  button:hover { border-color:var(--accent); }
+  button.primary { background:#133044; border-color:#1d4a66; }
+  button:disabled { opacity:.4; cursor:not-allowed; }
+  input[type=range] { padding:0; }
+  .grid2 { display:grid; grid-template-columns:1fr 1fr; gap:6px 10px; }
+  .grid2 label { display:flex; flex-direction:column; gap:3px; font-size:11px; }
+  table { width:100%; border-collapse:collapse; font-size:11.5px; }
+  td,th { text-align:left; padding:3px 6px; border-bottom:1px solid var(--line); }
+  th { color:var(--muted); font-weight:500; }
+  .num { text-align:right; font-variant-numeric:tabular-nums; }
+  .muted { color:var(--muted); }
+  .ok { color:var(--good); } .warn { color:var(--warn); }
+  #tooltip { position:fixed; pointer-events:none; background:#000a; border:1px solid var(--line);
+             padding:3px 7px; border-radius:6px; font-size:11px; display:none; z-index:10; }
+  .pill { display:inline-block; padding:1px 7px; border-radius:99px; background:#133044;
+          border:1px solid #1d4a66; font-size:11px; }
+  audio { width:100%; margin-top:6px; }
+  .hint { font-size:11px; color:var(--muted); }
+  #status { font-size:11.5px; color:var(--muted); min-height:18px; }
+  .scroll { max-height:260px; overflow:auto; }
+  .ab button.active { border-color:var(--accent); background:#133044; }
+  @media (max-width: 980px){ main{ grid-template-columns:1fr; } }
+</style>
+</head>
+<body>
+<header>
+  <h1>频谱涂抹式音频编辑器</h1>
+  <span class="tag">真实复数谱运算 · 重叠相加重建 · 物理单位选区 · 精确撤销</span>
+  <span id="hdrInfo" class="pill"></span>
+</header>
+
+<main>
+  <section class="card">
+    <div class="row">
+      <button id="btnDual" class="primary">载入双音</button>
+      <button id="btnSweep">扫频</button>
+      <button id="btnTransient">瞬态混合</button>
+      <button id="btnMixed">综合样例</button>
+      <input type="file" id="fileInput" accept=".wav,.flac,.ogg" />
+    </div>
+    <div class="row">
+      <canvas id="spec" width="1080" height="480"></canvas>
+    </div>
+    <div class="row hint">
+      拖拽 = 绘制矩形增益选区（坐标始终为 秒 / Hz，缩放不改变实际频箱）；
+      滚轮 = 以光标为中心缩放；Shift+滚轮 = 纵向缩放；双击 = 重置视图。
+    </div>
+    <div class="row ab">
+      <button id="playPristine">试听原始 A</button>
+      <button id="playEdited">试听重建 B</button>
+      <button id="stopPlay">停止</button>
+      <span class="hint">A/B 切换用于前后对比（无头环境无音频设备时可下载 WAV）。</span>
+    </div>
+    <audio id="player" controls></audio>
+    <div id="status"></div>
+  </section>
+
+  <aside>
+    <div class="card" style="margin-bottom:12px">
+      <h2>分析 / 重建参数</h2>
+      <div class="grid2">
+        <label>FFT 长度
+          <select id="nFft"><option>1024</option><option selected>2048</option><option>4096</option></select>
+        </label>
+        <label>窗函数
+          <select id="window"><option value="hann" selected>hann</option>
+            <option value="sine">sine(root-hann)</option><option value="hamming">hamming</option></select>
+        </label>
+        <label>步长 hop
+          <select id="hop"><option>256</option><option selected>512</option><option>1024</option></select>
+        </label>
+        <label>跨声道策略
+          <select id="strategy">
+            <option value="phase_locked" selected>锁相（保留声道间相位差）</option>
+            <option value="coherent_joint">相干区联合重估</option>
+          </select>
+        </label>
+        <label>相干阈值 γ²
+          <input type="number" id="cohThr" value="0.6" step="0.05" min="0" max="1" />
+        </label>
+        <label>&nbsp;<button id="applyCfg" style="width:100%">应用并重建会话</button></label>
+      </div>
+    </div>
+
+    <div class="card" style="margin-bottom:12px">
+      <h2>画笔（物理单位）</h2>
+      <div class="grid2">
+        <label>增益 dB <input type="number" id="gainDb" value="-18" step="1" /></label>
+        <label>时间平滑 σ (s) <input type="number" id="featherT" value="0.03" step="0.005" min="0" /></label>
+        <label>频率平滑 σ (Hz) <input type="number" id="featherF" value="60" step="5" min="0" /></label>
+        <label>当前选区
+          <input type="text" id="selReadout" readonly placeholder="在画布拖拽" /></label>
+      </div>
+      <div class="row">
+        <button id="undo">撤销 (精确)</button>
+        <button id="clear">清空编辑</button>
+        <button id="rebuild" class="primary">重建波形</button>
+        <button id="export">导出 WAV 并再分析</button>
+      </div>
+      <div class="scroll">
+        <table><thead><tr><th>#</th><th>时间(s)</th><th>频率(Hz)</th><th class="num">dB</th></tr></thead>
+        <tbody id="strokeTable"></tbody></table>
+      </div>
+    </div>
+
+    <div class="card">
+      <h2>实际重建测量</h2>
+      <div id="metrics" class="muted">尚未重建。</div>
+    </div>
+  </aside>
+</main>
+<div id="tooltip"></div>
+
+<script src="/static/app.js"></script>
+</body>
+</html>
