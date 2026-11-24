@@ -36,6 +36,21 @@
 > （OLA 重建后重新做 STFT，含选区边界的窗效应）两组声像/相位数字，避免把窗的
 > 再分析泄漏误判成引擎破坏了相位。
 
+## 谱选区表示实验（选区怎么存）
+
+`docs/selection_representation.md`（由 `scripts/run_selection_experiment.py` 生成）
+在同一逆变换原型上对比两种选区存储表示：**连续边界曲线**（秒/Hz，求值时再栅格化）
+与**带原始窗参数的系数掩码**（按像素固化 / 物理重采样 / 拒绝三种重开策略）。
+用同一窄带音与瞬态素材，在变窗（n_fft 2048→4096、hop 512→1024）后重开保存的选区，
+以掩码边界（半增益等值线落点）与重建误差（目标带衰减、相邻带误伤、逐 click 电平）
+量化取舍。结论：**选区以连续边界为唯一真实存储，掩码只作绑定窗参数的派生缓存**；
+界面"应用并重建会话"（`/api/reconfigure`）即按此实现——换窗后选区不丢失，
+在新网格上重新求值。复算：
+
+```bash
+.venv/bin/python scripts/run_selection_experiment.py   # 重新生成文档与全部证据
+```
+
 ## 测量指标（`spectralpaint/metrics.py`）
 
 * `pan_shift_db`：中/侧能量比导出的声像变化（dB）；
@@ -51,6 +66,7 @@
 spectralpaint/
   dsp.py        STFT/ISTFT、COLA 归一化、物理频率/时间坐标
   mask.py       物理单位笔画、高斯羽化、dB 复合
+  selection.py  选区存储表示：连续边界曲线 / 带窗参数的系数掩码（实验对象）
   engine.py     EditSession：两种声道策略、相干性、精确撤销、重建
   metrics.py    声像/相位/泄漏/边界/往返测量
   signals.py    双音、扫频、瞬态混合、综合样例（确定性生成）
@@ -59,8 +75,11 @@ spectralpaint/
 web/
   index.html    单页界面（时频画布、缩放、A/B 试听、指标面板）
   app.js        视图变换（像素↔秒/Hz）、绘制、API 交互
-tests/          pytest，31 个用例
-scripts/run_app.py  启动 UI / 无头批处理
+tests/          pytest，44 个用例
+scripts/run_app.py                  启动 UI / 无头批处理
+scripts/run_selection_experiment.py 谱选区表示实验（生成 docs 与 exports 证据）
+scripts/ui_smoke.py                 浏览器端 UI 冒烟（Playwright 驱动真实界面）
+docs/selection_representation.md    谱选区表示实验结论（由脚本生成，数字可复算）
 ```
 
 ## 运行
@@ -79,6 +98,9 @@ python scripts/run_app.py demo --signal mixed_sample \
 
 # 3) 测试
 python -m pytest tests -q
+
+# 4) 浏览器 UI 冒烟（需先安装浏览器：python -m playwright install chromium）
+python scripts/ui_smoke.py
 ```
 
 ### 界面操作
@@ -87,6 +109,8 @@ python -m pytest tests -q
 * **滚轮** 以光标为中心缩放（Shift+滚轮只缩频率轴），**双击** 复位视图。
   缩放只改视图，不改变实际作用的频箱与声音。
 * 增益（dB）、时间/频率羽化 σ 在右侧设置；`重建波形` 后可 **A/B 试听**。
+* `应用并重建会话` 切换 FFT 长度/hop/窗/策略：**选区不丢失**——它们以连续
+  秒/Hz 边界存储，在新分析网格上重新求值（见上方"谱选区表示实验"）。
 * `撤销` 从原始谱重建回上一状态；`导出 WAV 并再分析` 落盘后重新加载校验。
 * 无头环境没有音频设备时，用内置音频播放器的下载按钮保存后试听。
 

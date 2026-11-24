@@ -16,6 +16,8 @@ POST /api/clear               remove all strokes
 POST /api/rebuild             run inverse STFT, return metrics + edited spectrogram
 GET  /api/audio?which=...     pristine or edited audio as WAV (for A/B preview)
 POST /api/export              write edited audio to disk, then re-analyze the file
+POST /api/reconfigure         change n_fft/hop/window, keeping the saved selections
+                              (continuous s/Hz boundaries re-evaluated on the new grid)
 """
 
 from __future__ import annotations
@@ -258,6 +260,35 @@ def handle_strategy(body: dict) -> dict:
     return _session_info(True)
 
 
+def handle_reconfigure(body: dict) -> dict:
+    """Change analysis window parameters *keeping the saved selections*.
+
+    Strokes are stored as continuous boundaries in physical units (s / Hz),
+    so they are simply re-evaluated on the new STFT grid -- the storage
+    strategy validated in docs/selection_representation.md.  A coefficient
+    mask could not do this (it is bound to its original window); the curve
+    representation can.  Invalid parameters (e.g. hop > n_fft) raise from the
+    DSP layer and are returned as a JSON error.
+    """
+    s = STATE.require()
+    cfg = _cfg_from_body(body)
+    strategy = body.get("strategy", s.strategy)
+    threshold = float(body.get("coherence_threshold", s.coherence_threshold))
+    with STATE.lock:
+        strokes = [Stroke(**vars(st)) for st in s.strokes]
+        samples, sr = s.samples, s.sr
+        STATE.new(samples, sr, cfg, strategy, threshold)
+        STATE.session.strokes = strokes
+    info = _session_info(True)
+    info["reconfigured"] = {
+        "kept_strokes": len(strokes),
+        "n_fft": cfg.n_fft, "hop": cfg.hop, "window": cfg.window,
+        "note": "selections stored as continuous s/Hz boundaries, "
+                "re-evaluated on the new grid",
+    }
+    return info
+
+
 class Handler(BaseHTTPRequestHandler):
     server_version = "SpectralPaint/1.0"
 
@@ -318,6 +349,7 @@ class Handler(BaseHTTPRequestHandler):
                 "/api/rebuild": lambda: handle_rebuild(),
                 "/api/export": lambda: handle_export(body),
                 "/api/strategy": lambda: handle_strategy(body),
+                "/api/reconfigure": lambda: handle_reconfigure(body),
             }.get(parsed.path)
             if route is None:
                 self._send_json({"error": "not found"}, 404)

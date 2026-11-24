@@ -298,25 +298,32 @@ $("fileInput").onchange = async (e) => {
 };
 
 $("applyCfg").onclick = async () => {
-  try { await api("/api/strategy", { strategy: $("strategy").value,
-    coherence_threshold: +$("cohThr").value });
-    // analysis params require a fresh session; reload current demo
-    if (S && S.strokes.length === 0) setStatus("策略已切换；分析窗/hop 变更请重新载入样例。");
-    else setStatus("策略已切换。");
-    const j = await api("/api/session", {}); await refresh(j, true);
-  } catch (err) { setStatus(err.message, true); }
+  // Window parameters change the STFT grid.  Selections are stored as
+  // continuous s/Hz boundaries (see docs/selection_representation.md), so the
+  // backend re-evaluates them on the new grid instead of dropping them.
+  // Kernel errors (e.g. hop > n_fft) come back as JSON and are shown here.
+  try {
+    const j = await api("/api/reconfigure", {
+      n_fft: +$("nFft").value, hop: +$("hop").value, window: $("window").value,
+      strategy: $("strategy").value, coherence_threshold: +$("cohThr").value,
+    });
+    await refresh(j);
+    const r = j.reconfigured;
+    setStatus(`分析窗已切换为 nfft=${r.n_fft} hop=${r.hop} ${r.window}；`
+      + `${r.kept_strokes} 个选区按连续边界在新网格重算（未丢弃）。`);
+  } catch (err) { setStatus("重建会话失败（内核拒绝参数）：" + err.message, true); }
 };
 
 $("undo").onclick = async () => {
-  try { const j = await api("/api/undo"); await refresh(j, true); setStatus("已撤销最后一笔（从原始谱重建，非反向增益）。"); }
+  try { const j = await api("/api/undo", {}); await refresh(j, true); setStatus("已撤销最后一笔（从原始谱重建，非反向增益）。"); }
   catch (err) { setStatus(err.message, true); }
 };
 $("clear").onclick = async () => {
-  try { const j = await api("/api/clear"); await refresh(j, true); setStatus("已清空全部编辑。"); }
+  try { const j = await api("/api/clear", {}); await refresh(j, true); setStatus("已清空全部编辑。"); }
   catch (err) { setStatus(err.message, true); }
 };
 $("rebuild").onclick = async () => {
-  try { const j = await api("/api/rebuild"); await refresh(j); setStatus("已通过逆 STFT + 重叠相加重建波形。"); }
+  try { const j = await api("/api/rebuild", {}); await refresh(j); setStatus("已通过逆 STFT + 重叠相加重建波形。"); }
   catch (err) { setStatus(err.message, true); }
 };
 $("export").onclick = async () => {
